@@ -178,7 +178,7 @@ def main(args):
     }
     
     # Save the sampled data
-    json.dump(sampled_data, open(f"result/sample_data/{args.output_file}", "w"), indent=4)
+    json.dump(sampled_data, open(f"../data/coco/coco2014/annotations/{args.output_file}", "w"), indent=4)
     
     logging.info('Creating a plot for the number of images per category before and after sampling.')
     # Plot the statistics
