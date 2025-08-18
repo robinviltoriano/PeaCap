@@ -178,3 +178,111 @@ class COCODatasetSelectedPatch(Dataset):
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
             ])
+
+class ExtDataset(Dataset):
+    
+    def patchify_tensor(self, img_tensor, patch_stride=None):
+        if patch_stride is None:
+            patch_stride = self.patch_size
+        patches = img_tensor.unfold(
+            1, self.patch_size, patch_stride).unfold(2, self.patch_size, patch_stride)
+        patches = patches.reshape(3, -1, self.patch_size, self.patch_size).permute(1, 0, 2, 3)
+        return patches
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+    def __getitem__(self, index: int):
+        img_file = self.files[index]
+        
+        if self.database_type == 'lvis':
+            # for LVIS database
+            _, img_id, cat_id, _ = re.split(r'[_\.]', self.files[index])
+            
+        elif self.database_type == 'coco':
+            # for COCO database
+            if isinstance(self.files[index], str):
+                cat_id, img_file = self.files[index].split('_')
+            elif isinstance(self.files[index], tuple):
+                cat_id, img_file = self.files[index]
+                
+                cat_id = ", ".join([str(x) for x in cat_id])
+            img_id = int(re.search('\d*', img_file)[0])
+            
+        elif self.database_type == 'synthetic_image':
+            img_id = self.files[index].split('.')[0]
+            cat_id = ' '.join(re.findall(r'[a-zA-Z]+', img_id))
+        else:
+            # for predefined database from EVCap
+            cat_id = -999
+            img_id = int(re.findall('\d*',self.files[index].split('/')[1])[0])
+            
+        selected_patch = self.selected_patch_data.get(img_id) if self.selected_patch_data is not None else None
+            
+        image_path = os.path.join(self.vis_root, img_file)
+        image = Image.open(image_path).convert("RGB")
+        
+        if self.is_transform:
+            image = self.transform(image)
+            image = image.to(torch.float32)
+        
+        if self.patchify:
+            image = self.patchify_tensor(image, patch_stride=self.patch_stride)
+            
+            if selected_patch is not None:
+                selected_idx = torch.tensor(selected_patch['selected_patch'])  # example
+                mask = torch.zeros_like(image)
+                mask[selected_idx] = image[selected_idx]
+                image = mask
+                
+            if self.merge_patch:
+                image = image.view(self.number_of_patch, self.number_of_patch, 3, 224, 224)
+                image = image.permute(2, 0, 3, 1, 4)  
+                image = image.contiguous().view(3, self.number_of_patch*224, self.number_of_patch*224)
+                
+                image = F.interpolate(image.unsqueeze(0), size=(self.patch_size, self.patch_size), mode='bicubic', align_corners=False).squeeze(0)
+        
+        return {
+            "image": image,
+            "image_id": img_id,
+            "category_id": cat_id,            
+        }
+
+    def __init__(self, 
+                 image_files: list, 
+                 image_file_path: str = './lvis/', 
+                 database_type: str = 'lvis',
+                 input_image_size: int = 224,
+                 is_normalize: bool = True,
+                 patchify: bool = False,
+                 patch_size: int = 224,
+                 patch_stride: int = None,
+                 selected_patch_data: dict = None,
+                 merge_patch: bool = False,
+                 is_transform: bool = True
+                 ):
+        self.files = image_files  
+        self.vis_root = image_file_path
+        self.is_normalize = is_normalize
+        self.patchify = patchify
+        self.patch_size = patch_size
+        self.patch_stride = patch_stride
+        self.selected_patch_data = selected_patch_data
+        self.merge_patch = merge_patch
+        self.is_transform = is_transform
+        
+        if patchify:
+            self.number_of_patch = input_image_size//patch_size
+        
+        self.transform = transforms.Compose([
+                transforms.Resize((input_image_size, input_image_size), interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+            ])
+        
+        if is_normalize:
+            self.transform = transforms.Compose([
+                transforms.Resize((input_image_size, input_image_size), interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+            ])
+        self.database_type = database_type 
