@@ -94,7 +94,7 @@ def get_dataloader(
 
     dataset = ExtDataset(
         database_image_names, 
-        image_file_path = "./data/coco/images/train2017/", 
+        image_file_path = "./data/coco/train2017/", 
         database_type="coco",
         input_image_size = 224,
         patchify= False,
