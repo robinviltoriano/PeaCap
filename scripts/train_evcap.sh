@@ -1,7 +1,7 @@
 #!/bin/bash
 
 EXP_NAME='evcap'
-TIME_START=$(date "+%H:%M:%S_%d-%m-%Y")
+TIME_START=$(date "+%d-%m-%Y_%H:%M:%S")
 SUB_FOLDER=TRAIN/SAMPLE
 SAVE_FILE=results/${SUB_FOLDER}/${EXP_NAME}
 TRAIN_LOG_FILE=log/${SUB_FOLDER}/${EXP_NAME}/${TIME_START}.log

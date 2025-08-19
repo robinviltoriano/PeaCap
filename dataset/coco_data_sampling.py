@@ -198,7 +198,7 @@ if __name__ == "__main__":
                                  --percentage 0.04 \
                                  --output_file instances_train2014_sampled.json
                                  
-    --instance_file ../data/coco/coco2014/annotations/instances_val2014.json --caption_file ../data/coco/coco2014/annotations/captions_val2014.json --output_file instances_val2014_sampled.json --percentage 0.05
+    --instance_file ../data/coco/coco2014/annotations/instances_val2014.json --caption_file ../data/coco/coco2014/annotations/captions_val2014.json --output_file captions_val2014_sampled.json --percentage 0.05
     """
     
     
