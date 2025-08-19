@@ -336,8 +336,8 @@ if __name__ == '__main__':
         "ext_path" : args.ext_data_path,
         "vit_model" : "eva_clip_g",
         "q_former_model" : "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
-        # "patch_size" : 224,
-        "img_size": 224, ##
+        "patch_size" : 224,
+        # "img_size": 224, ##
         "drop_path_rate" : 0,
         "use_grad_checkpoint" : False,
         "vit_precision" : "fp16",
