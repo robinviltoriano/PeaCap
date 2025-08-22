@@ -17,14 +17,6 @@ from torch.utils.data import DataLoader
 import logging
 import time
 current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Output to terminal
-        logging.FileHandler(f'./ext_data/vectorize_image/log/qformer_vectorize_image_{current_time}.log')  # Output to file
-    ]
-    )
 
 from dataset.coco_dataset import ExtDataset
 
@@ -75,6 +67,7 @@ def get_image_file_name(img_id):
 
 def get_dataloader(
     preprocessed_dictionary: dict,
+    batch_size: int = 100
     
 ):
     """
@@ -94,12 +87,12 @@ def get_dataloader(
 
     dataset = ExtDataset(
         database_image_names, 
-        image_file_path = "./data/coco/train2017/", 
+        image_file_path = "./data/coco/coco2014/train2017/", 
         database_type="coco",
         input_image_size = 224,
         patchify= False,
         )
-    dataloader = DataLoader(dataset, batch_size=100, pin_memory=True, shuffle=False, drop_last=False)
+    dataloader = DataLoader(dataset, batch_size=batch_size, pin_memory=True, shuffle=False, drop_last=False)
     
     return dataloader
 
@@ -190,6 +183,14 @@ if __name__ == "__main__":
     Script example:
     python -m ext_data.vectorize_image.qformer_vectorize_image
     """
+    logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Output to terminal
+        logging.FileHandler(f'./ext_data/vectorize_image/log/qformer_vectorize_image_{current_time}.log')  # Output to file
+    ]
+    )
     main(
         dataset_path = './data/lvis/lvis_v1_train_distilled.json',
         output_path_subfolder = './ext_data/result/embeddings_32'

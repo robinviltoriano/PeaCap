@@ -105,11 +105,11 @@ def train(dataset, model, args):
     scheduler = LinearWarmupCosineLRScheduler(optimizer= optimizer,
                 max_epoch=epochs,
                 iters_per_epoch=len(dataloader),
-                min_lr=1e-5 ,
+                min_lr=8e-5 ,
                 init_lr=init_lr,
                 decay_rate=None,
                 warmup_start_lr=1e-6 ,
-                warmup_steps=int(0.05 * (len(dataset) // args.accum_grad_iters)),)
+                warmup_steps=int(0.05 * (len(dataset) // (args.accum_grad_iters * args.bs))),)
     if args.amp:
         scaler = torch.cuda.amp.GradScaler()
     use_amp = scaler is not None
@@ -117,9 +117,9 @@ def train(dataset, model, args):
     
     # Metric Logger Configuration
     metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=args.accum_grad_iters, fmt='{value:.6f}'))
-    metric_logger.add_meter('loss', utils.SmoothedValue(window_size=args.accum_grad_iters, fmt='{value:.6f}'))
-    metric_logger.add_meter('grad_norm', utils.SmoothedValue(window_size=args.accum_grad_iters, fmt='{value:.6f}'))
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
+    metric_logger.add_meter('loss', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
+    metric_logger.add_meter('grad_norm', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
     
     if args.ckpts_path:
         print(f"Loading checkpoint from {args.ckpts_path}")
@@ -298,6 +298,7 @@ def main():
         "vit_model":"eva_clip_g",
         "q_former_model":"https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
         "patch_size":224,
+        # "img_size":224,
         "drop_path_rate":0,
         "use_grad_checkpoint":False,
         "vit_precision":"fp16",

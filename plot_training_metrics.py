@@ -57,3 +57,15 @@ def plot_training_metrics(root_path:str, model_name:str, file:str) -> None:
     fig.suptitle(f'Training Metrics for {model_name}', fontsize=16)
 
     fig.savefig(os.path.join(root_path,'training_metrics_plots.jpg'), format='jpg')
+    
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Plot training metrics from a JSON file.')
+    parser.add_argument('--root_path', type=str, required=True, help='Root folder of the training results')
+    parser.add_argument('--model_name', type=str, required=True, help='Name of the model')
+    parser.add_argument('--file', type=str, required=True, help='Name of the JSON file containing training metrics')
+    
+    args = parser.parse_args()
+    
+    plot_training_metrics(args.root_path, args.model_name, args.file)

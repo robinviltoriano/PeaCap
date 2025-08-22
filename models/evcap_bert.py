@@ -65,7 +65,6 @@ class EVCap(Blip2Base):
         print('Loading VIT Done')
 
         print('Loading Q-Former')
-        self.bert_tokenizer = self.init_tokenizer()
         self.Qformer, self.query_tokens = self.init_Qformer(
             num_query_token, self.visual_encoder.num_features
         )
@@ -75,6 +74,8 @@ class EVCap(Blip2Base):
         # for layer in self.Qformer.bert.encoder.layer:
         #     layer.output = None
         #     layer.intermediate = None
+        self.bert_tokenizer = self.init_tokenizer()
+        self.Qformer.resize_token_embeddings(len(self.bert_tokenizer))
         self.load_from_pretrained(url_or_filename=q_former_model)
 
         if freeze_qformer:
@@ -85,6 +86,9 @@ class EVCap(Blip2Base):
             self.query_tokens.requires_grad = True
             logging.info("freeze Qformer")
         print('Loading Q-Former Done')
+        
+        # self.vision_proj = nn.Linear(self.Qformer.config.hidden_size, 256)
+        # self.text_proj = nn.Linear(self.Qformer.config.hidden_size, 256)
 
 
         ##### Text 
@@ -94,7 +98,7 @@ class EVCap(Blip2Base):
         #     num_query_token, self.visual_encoder.num_features)
 
         # self.Qformer_txt.resize_token_embeddings(len(self.bert_tokenizer))
-        # # self.load_from_pretrained(url_or_filename=q_former_model)
+        # self.load_from_pretrained(url_or_filename=q_former_model)
         # if freeze_qformer:
         #     for name, param in self.Qformer_txt.named_parameters():
         #         param.requires_grad = False
@@ -247,9 +251,9 @@ class EVCap(Blip2Base):
 
     def encode_img(self, image):
         device = image.device
-        if self.low_resource:
-            self.vit_to_cpu()
-            image = image.to("cpu")
+        # if self.low_resource:
+        #     self.vit_to_cpu()
+        #     image = image.to("cpu")
 
         with self.maybe_autocast():
             image_embeds = self.ln_vision(self.visual_encoder(image)).to(device)
@@ -263,7 +267,6 @@ class EVCap(Blip2Base):
                 return_dict=True,
             )
             query_output_img = query_outputs_img.last_hidden_state
-            # query_output_img_atts = torch.ones(query_output_img.size()[:-1], dtype=torch.long).to(device)
             re_txt_list_all  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
                             
             re_txt_list_batch = []
@@ -290,6 +293,8 @@ class EVCap(Blip2Base):
                 attention_mask=text.attention_mask,
                 return_dict=True,
             )
+
+            # query_output_txt = text_output.last_hidden_state[:, 0, :]
             query_output_txt = text_output.last_hidden_state
 
             query_output_all = torch.cat([query_output_img, query_output_txt], dim=1) 
@@ -358,7 +363,7 @@ if __name__ == "__main__":
 
     from dataset.coco_dataset import COCODataset
     from torch.utils.data import DataLoader
-    device = 'cpu'
+    device = 'cuda:0'
     data_root = 'data/coco/coco2014'
     image_resize = 224
     dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_sampled.json', resize=image_resize)

@@ -16,7 +16,7 @@ from common.dist_utils import (
     init_distributed_mode,
     get_world_size,
 )
-
+from plot_training_metrics import plot_training_metrics
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
@@ -146,6 +146,7 @@ def main():
     parser.add_argument('--random_seed', type = int, default = 42, help = 'set random seed for reproducing')
     parser.add_argument('--annotation_file_for_train', type = str, default = 'annotations/captions_train2014_10_categories.json')
     parser.add_argument('--log_folder', type = str, default = 'logs', help = 'folder to save logs')
+    parser.add_argument('--model_path', type = str, default = 'models.evcap', help = 'path to the model')
 
     args = parser.parse_args()
     print(f'args: {vars(args)}')
@@ -191,6 +192,8 @@ def main():
     model = EVCap(**model_config)
     
     train(dataset, model, args)
+    
+    plot_training_metrics(args.out_dir, args.model_path,'training_metrics.json')
 
 
 if __name__ == '__main__':

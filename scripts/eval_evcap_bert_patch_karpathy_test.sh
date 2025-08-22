@@ -6,7 +6,7 @@ DEVICE=$2
 SUB_FOLDER=EVAL/VAL/SAMPLE
 NOCAPS_OUT_PATH=results/${SUB_FOLDER}/$EXP_NAME
 
-TIME_START=$(date "+%Y-%m-%d-%H-%M-%S")
+TIME_START=$(date "+%d-%m-%Y_%H:%M:%S")
 LOG_FOLDER=logs/${SUB_FOLDER}/${EXP_NAME}
 mkdir -p $LOG_FOLDER
 
@@ -16,7 +16,7 @@ NOCAPS_LOG_FILE="$LOG_FOLDER/NOCAPS_${TIME_START}.log"
 # MODEL CONFIGURATION (Need to be adjusted)
 model_path="models.evcap"
 input_image_resize=224
-ckpt="results/TRAIN/SAMPLE/evcap/000.pt"
+ckpt="results/TRAIN/SAMPLE/evcap3/final_result_000.pt"
 ext_data_path="ext_data/ext_memory_lvis.pkl"
 
 ##########################################

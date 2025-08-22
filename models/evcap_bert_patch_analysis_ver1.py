@@ -1,4 +1,5 @@
 import logging
+import numpy as np
 import torch
 from torch.cuda.amp import autocast as autocast
 import torch.nn as nn
@@ -9,6 +10,8 @@ from transformers import LlamaTokenizer
 import pickle
 import faiss
 import re
+from torch.nn import functional as F
+
 
 class EVCap(Blip2Base):
     
@@ -24,7 +27,6 @@ class EVCap(Blip2Base):
         freeze_vit=True,
         freeze_qformer=True,
         num_query_token=32,
-        num_query_token_txt=8,
         topn=9,
         llama_model="",
         prompt_path="prompts/prompt_evcap.txt",
@@ -37,6 +39,7 @@ class EVCap(Blip2Base):
         super().__init__()
 
         self.low_resource = low_resource
+        self.patch_size = patch_size
         self.topn = topn
         print('topn:', self.topn)
 
@@ -80,26 +83,23 @@ class EVCap(Blip2Base):
 
 
         ##### Text 
+        print('Load Q-Former BERT')
         self.bert_tokenizer = self.init_tokenizer()
-        self.Qformer_txt, self.query_tokens_txt = self.init_Qformer_txt(
-            num_query_token_txt, self.Qformer.config.hidden_size
-        )
+        self.Qformer_txt, _ = self.init_Qformer(
+            num_query_token, self.visual_encoder.num_features)
+
         self.Qformer_txt.resize_token_embeddings(len(self.bert_tokenizer))
-        self.Qformer_txt.cls = None
-        self.load_from_pretrained(url_or_filename=q_former_model)
+        # self.load_from_pretrained(url_or_filename=q_former_model)
         if freeze_qformer:
             for name, param in self.Qformer_txt.named_parameters():
                 param.requires_grad = False
             self.Qformer_txt = self.Qformer_txt.eval()
             self.Qformer_txt.train = disabled_train
-            self.query_tokens_txt.requires_grad = True
             logging.info("freeze Qformer")
-        print('query_tokens_txt', self.query_tokens_txt.shape)
-        print('Loading Q-Former Done')
-        print('Loading Q-Former_txt Done')
+        print('Loading Q-Former BERT Done')
 
 
-        ##### Caption generation 
+        # Caption generation 
         print('Loading LLAMA')
         self.llama_tokenizer = LlamaTokenizer.from_pretrained(llama_model, use_fast=False)
         self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token
@@ -121,7 +121,7 @@ class EVCap(Blip2Base):
             param.requires_grad = False
         print('Loading LLAMA Done')
 
-        ###
+        
         self.llama_proj = nn.Linear(
             self.Qformer.config.hidden_size, self.llama_model.config.hidden_size
         )
@@ -149,6 +149,14 @@ class EVCap(Blip2Base):
             print(f"loaded external base image")
 
 
+    def patchify(self, image_tensor, patch_size, patch_stride=None):
+        if patch_stride is None:
+            patch_stride = patch_size
+        patches = image_tensor.unfold(
+            1, patch_size, patch_stride).unfold(2, patch_size, patch_stride)
+        patches = patches.reshape(3, -1, patch_size, patch_size).permute(1, 0, 2, 3)
+        return patches 
+    
     def vit_to_cpu(self):
         self.ln_vision.to("cpu")
         self.ln_vision.float()
@@ -201,7 +209,7 @@ class EVCap(Blip2Base):
         caption = caption.strip(" ")
         return caption
 
-    def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 5, sub_top_k = 32):
+    def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 1, sub_top_k = 3):
         batch_size, nums, dims = query_features.shape
         query_features = query_features.view(-1,dims)   
 
@@ -239,19 +247,38 @@ class EVCap(Blip2Base):
             image = image.to("cpu")
 
         with self.maybe_autocast():
-            image_embeds = self.ln_vision(self.visual_encoder(image)).to(device)
-            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
+            image_patches = torch.stack([self.patchify(img, patch_size=self.patch_size) for img in image])
+            # Pad in case not equal to model expected input resolution.
+            p = self.visual_encoder.image_size - self.patch_size
+            image_patches_pad = torch.nn.functional.pad(
+                image_patches, (p//2, p//2, p//2, p//2), "constant", 0).to(self.device)
+            
+            query_output_img_stack = []
+            re_txt_list_all = []
+            
+            for image_per_batch in image_patches_pad:
+                image_embeds = self.ln_vision(self.visual_encoder(image_per_batch)).to(device)
+                image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
 
-            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-            query_outputs_img = self.Qformer.bert(
-                query_embeds=query_tokens,
-                encoder_hidden_states=image_embeds,
-                encoder_attention_mask=image_atts,
-                return_dict=True,
-            )
-            query_output_img = query_outputs_img.last_hidden_state
-            query_output_img_atts = torch.ones(query_output_img.size()[:-1], dtype=torch.long).to(device)
-            re_txt_list_all  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
+                query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+                query_outputs_img = self.Qformer.bert(
+                    query_embeds=query_tokens,
+                    encoder_hidden_states=image_embeds,
+                    encoder_attention_mask=image_atts,
+                    return_dict=True,
+                )
+                query_output_img = query_outputs_img.last_hidden_state
+                # query_output_img_projection = self.qformer_proj(query_output_img.permute(0,2,1)).permute(0,2,1)
+                # query_output_img_atts = torch.ones(query_output_img.size()[:-1], dtype=torch.long).to(device)
+                re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
+                re_txt_list_all_per_patch_flat = list(set(np.array(re_txt_list_all_per_patch, dtype=object).flatten()))
+                
+                
+                re_txt_list_all.append(re_txt_list_all_per_patch_flat)
+                
+                # Append the outputs to the stacks
+                query_output_img_stack.append(query_output_img)
+                            
             re_txt_list_batch = []
             for sublist in re_txt_list_all:
                 sublist_new = []
@@ -261,7 +288,25 @@ class EVCap(Blip2Base):
                         if len(sublist_new)>self.topn: 
                             break
                 re_txt_list_batch.append(" [SEP] ".join(sublist_new))
-
+                
+            # Use whole image for QFormer embedding
+            resize_image = F.interpolate(
+                image, 
+                size=(self.patch_size, self.patch_size), 
+                mode='bilinear', align_corners=False
+            )
+            image_embeds = self.ln_vision(self.visual_encoder(resize_image)).to(device)
+            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
+            
+            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+            query_outputs_img_224 = self.Qformer.bert(
+                    query_embeds=query_tokens,
+                    encoder_hidden_states=image_embeds,
+                    encoder_attention_mask=image_atts,
+                    return_dict=True,
+                )
+            query_output_img_224 = query_outputs_img_224.last_hidden_state
+                
             text = self.bert_tokenizer(
                     re_txt_list_batch,
                     truncation=True,
@@ -270,27 +315,20 @@ class EVCap(Blip2Base):
                     return_tensors="pt",
                 ).to(image.device)
 
-            query_tokens_txt = self.query_tokens_txt.expand(image_embeds.shape[0], -1, -1)
-            query_atts_txt = torch.ones(query_tokens_txt.size()[:-1], dtype=torch.long).to(
-                image_embeds.device
-            )
 
-            query_output_img_atts = torch.ones(query_output_img.size()[:-1], dtype=torch.long).to(device)
-            query_output_img_atts = torch.cat([query_atts_txt, query_output_img_atts], dim=1)
-
-
-            attention_mask = text.attention_mask
-            query_outputs_txt = self.Qformer_txt.bert(
+            text_output = self.Qformer_txt.bert(
                 text.input_ids,
-                query_embeds=query_tokens_txt,
-                attention_mask=attention_mask,
-                encoder_hidden_states=query_output_img,
-                encoder_attention_mask=query_output_img_atts,
+                attention_mask=text.attention_mask,
                 return_dict=True,
             )
-            query_output_txt = query_outputs_txt.last_hidden_state[:, : query_tokens_txt.size(1), :]
-
-            query_output_all = torch.cat([query_output_img, query_output_txt], dim=1) 
+            query_output_txt = text_output.last_hidden_state
+            
+            query_output_img_stack_tensor = torch.stack(query_output_img_stack)
+            query_output_img_stack_tensor = query_output_img_stack_tensor.view(
+                query_output_img_stack_tensor.size(0), -1, query_output_img_stack_tensor.size(-1))
+            
+            
+            query_output_all = torch.cat([query_output_img_stack_tensor,query_output_img_224, query_output_txt], dim=1) 
             qform_all_proj = self.llama_proj(query_output_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
         return qform_all_proj, atts_qform_all_proj
@@ -347,14 +385,46 @@ class EVCap(Blip2Base):
 
         return {"output": outputs[0], "loss": loss}
     
-# if __name__ == "__main__":
-#     """
-#     This code is for testing the EVCap model.
-#     It initializes the model and runs a forward pass with dummy data.
-#     It is not intended for production use.
-#     """
-#     from dataset.coco_dataset import COCODataset
+if __name__ == "__main__":
+    """
+    This code is for testing the EVCap model.
+    It initializes the model and runs a forward pass with dummy data.
+    It is not intended for production use.
+    """
 
-#     data_root = 'data/coco/coco2014'
-#     dataset = COCODataset(data_root=data_root, annotation_file=args.annotation_file_for_train)
-#     model_type = "lmsys/vicuna-7b-v1.3"
+    from dataset.coco_dataset import COCODataset
+    from torch.utils.data import DataLoader
+    device = 'cpu'
+    data_root = 'data/coco/coco2014'
+    image_resize = 680
+    dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_in_scope.json', resize=image_resize)
+    model_type = "lmsys/vicuna-7b-v1.3"
+    model = EVCap(
+            ext_path= 'ext_data/ext_memory_original_sample.pkl',
+            vit_model="eva_clip_g",
+            q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
+            img_size=image_resize,
+            patch_size=224,
+            drop_path_rate=0,
+            use_grad_checkpoint=False,
+            vit_precision="fp16",
+            freeze_vit=True,
+            freeze_qformer=True,
+            num_query_token=32,
+            num_query_token_txt=8,
+            topn = 9,
+            llama_model=model_type,
+            prompt_path="prompts/prompt_evcap.txt",
+            prompt_template='###Human: {} ###Assistant: ',
+            max_txt_len=128,
+            end_sym='\n',
+            low_resource=True,  # use 8 bit and put vit in cpu ##
+            device_8bit=1,  # the device of 8bit model should be set when loading and cannot be changed anymore.
+    )
+    model = model.to(device)
+    train_dataloader = DataLoader(dataset, batch_size=6, pin_memory=True, sampler=None,shuffle=False, drop_last=True)
+
+    for idx, samples in enumerate(train_dataloader):
+        print(f"Processing sample {idx}")
+        samples['image'] = samples['image'].to(device)
+        output = model(samples)["loss"]
