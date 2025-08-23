@@ -78,13 +78,12 @@ class EVCap(Blip2Base):
             self.query_tokens.requires_grad = True
             logging.info("freeze Qformer")
         print('Loading Q-Former Done')
-        
+
         self.fusion_transformer = FusionTransformer(
             d_model=self.Qformer.config.hidden_size,
             nhead=12,
             num_layers=2,
             d_ff=3072)
-
 
         # Caption generation 
         print('Loading LLAMA')
@@ -243,8 +242,8 @@ class EVCap(Blip2Base):
             query_output_img_stack = []
             re_txt_list_all = []
             
-            for image_per_batch in image_patches_pad:
-                image_embeds = self.ln_vision(self.visual_encoder(image_per_batch)).to(device)
+            for image_p in image_patches_pad:
+                image_embeds = self.ln_vision(self.visual_encoder(image_p)).to(device)
                 image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
 
                 query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
@@ -255,14 +254,18 @@ class EVCap(Blip2Base):
                     return_dict=True,
                 )
                 query_output_img = query_outputs_img.last_hidden_state
+                # query_output_img_projection = self.qformer_proj(query_output_img.permute(0,2,1)).permute(0,2,1)
+                # query_output_img_atts = torch.ones(query_output_img.size()[:-1], dtype=torch.long).to(device)
                 re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
                 re_txt_list_all_per_patch_flat = list(set(np.array(re_txt_list_all_per_patch, dtype=object).flatten()))
                 
                 
                 re_txt_list_all.append(re_txt_list_all_per_patch_flat)
                 
+                del query_output_img
+                
                 # Append the outputs to the stacks
-                query_output_img_stack.append(query_output_img)
+                # query_output_img_stack.append(query_output_img)
                             
             re_txt_list_batch = []
             for sublist in re_txt_list_all:
@@ -308,13 +311,8 @@ class EVCap(Blip2Base):
             )
             query_output_txt = text_output.last_hidden_state[:, 0, :]
             
-            query_output_img_stack_tensor = torch.stack(query_output_img_stack)
-            query_output_img_stack_tensor = query_output_img_stack_tensor.view(
-                query_output_img_stack_tensor.size(0), -1, query_output_img_stack_tensor.size(-1))
-            
-            
-            # query_output_all = torch.cat([query_output_img_stack_tensor,query_output_img_224, query_output_txt], dim=1) 
-            fusion_query_all = self.fusion_transformer(query_output_img_stack_tensor,query_output_img_224, query_output_txt.unsqueeze(1))
+            # query_output_all = torch.cat([query_output_img_224, query_output_txt], dim=1) 
+            fusion_query_all = self.fusion_transformer(query_output_img_224, query_output_txt.unsqueeze(1))
             qform_all_proj = self.llama_proj(fusion_query_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
         return qform_all_proj, atts_qform_all_proj
@@ -408,7 +406,7 @@ if __name__ == "__main__":
             device_8bit=1,  # the device of 8bit model should be set when loading and cannot be changed anymore.
     )
     model = model.to(device)
-    train_dataloader = DataLoader(dataset, batch_size=6, pin_memory=True, sampler=None,shuffle=False, drop_last=True)
+    train_dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, sampler=None,shuffle=False, drop_last=True)
 
     for idx, samples in enumerate(train_dataloader):
         print(f"Processing sample {idx}")

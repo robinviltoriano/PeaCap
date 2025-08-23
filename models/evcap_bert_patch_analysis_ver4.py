@@ -1,3 +1,8 @@
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname('../')))
+### don't forget to erase the above lines
+
 import logging
 import numpy as np
 import torch
@@ -65,7 +70,7 @@ class EVCap(Blip2Base):
         self.Qformer, self.query_tokens = self.init_Qformer(
             num_query_token, self.visual_encoder.num_features
         )
-        
+    
         self.bert_tokenizer = self.init_tokenizer()
         self.Qformer.resize_token_embeddings(len(self.bert_tokenizer))
         self.load_from_pretrained(url_or_filename=q_former_model)
@@ -84,7 +89,6 @@ class EVCap(Blip2Base):
             nhead=12,
             num_layers=2,
             d_ff=3072)
-
 
         # Caption generation 
         print('Loading LLAMA')
@@ -243,8 +247,8 @@ class EVCap(Blip2Base):
             query_output_img_stack = []
             re_txt_list_all = []
             
-            for image_per_batch in image_patches_pad:
-                image_embeds = self.ln_vision(self.visual_encoder(image_per_batch)).to(device)
+            for image_p in image_patches_pad:
+                image_embeds = self.ln_vision(self.visual_encoder(image_p)).to(device)
                 image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
 
                 query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
@@ -274,24 +278,6 @@ class EVCap(Blip2Base):
                             break
                 re_txt_list_batch.append(" [SEP] ".join(sublist_new))
                 
-            # Use whole image for QFormer embedding
-            resize_image = F.interpolate(
-                image, 
-                size=(self.patch_size, self.patch_size), 
-                mode='bilinear', align_corners=False
-            )
-            image_embeds = self.ln_vision(self.visual_encoder(resize_image)).to(device)
-            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
-            
-            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-            query_outputs_img_224 = self.Qformer.bert(
-                    query_embeds=query_tokens,
-                    encoder_hidden_states=image_embeds,
-                    encoder_attention_mask=image_atts,
-                    return_dict=True,
-                )
-            query_output_img_224 = query_outputs_img_224.last_hidden_state
-                
             text = self.bert_tokenizer(
                     re_txt_list_batch,
                     truncation=True,
@@ -313,8 +299,8 @@ class EVCap(Blip2Base):
                 query_output_img_stack_tensor.size(0), -1, query_output_img_stack_tensor.size(-1))
             
             
-            # query_output_all = torch.cat([query_output_img_stack_tensor,query_output_img_224, query_output_txt], dim=1) 
-            fusion_query_all = self.fusion_transformer(query_output_img_stack_tensor,query_output_img_224, query_output_txt.unsqueeze(1))
+            # query_output_all = torch.cat([query_output_img_stack_tensor, query_output_txt], dim=1) 
+            fusion_query_all = self.fusion_transformer(query_output_img_stack_tensor, query_output_txt.unsqueeze(1))
             qform_all_proj = self.llama_proj(fusion_query_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
         return qform_all_proj, atts_qform_all_proj
@@ -389,7 +375,6 @@ if __name__ == "__main__":
             ext_path= 'ext_data/ext_memory_original_sample.pkl',
             vit_model="eva_clip_g",
             q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
-            img_size=image_resize,
             patch_size=224,
             drop_path_rate=0,
             use_grad_checkpoint=False,
@@ -397,7 +382,6 @@ if __name__ == "__main__":
             freeze_vit=True,
             freeze_qformer=True,
             num_query_token=32,
-            num_query_token_txt=8,
             topn = 9,
             llama_model=model_type,
             prompt_path="prompts/prompt_evcap.txt",
