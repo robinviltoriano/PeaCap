@@ -311,7 +311,7 @@ class EVCap(Blip2Base):
             )
             query_output_txt = text_output.last_hidden_state[:, 0, :]
             
-            query_output_all = torch.cat([query_output_img_224, query_output_txt], dim=1) 
+            query_output_all = torch.cat([query_output_img_224, query_output_txt.unsqueeze(1)], dim=1) 
             # fusion_query_all = self.fusion_transformer(query_output_img_224, query_output_txt.unsqueeze(1))
             qform_all_proj = self.llama_proj(query_output_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
