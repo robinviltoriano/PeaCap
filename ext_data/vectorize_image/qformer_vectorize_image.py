@@ -59,6 +59,14 @@ def set_dictionary_for_data_processing(dataset) -> dict:
     
     return dict_result
 
+def patchify(image_tensor, patch_size, patch_stride=None):
+        if patch_stride is None:
+            patch_stride = patch_size
+        patches = image_tensor.unfold(
+            1, patch_size, patch_stride).unfold(2, patch_size, patch_stride)
+        patches = patches.reshape(3, -1, patch_size, patch_size).permute(1, 0, 2, 3)
+        return patches 
+
 def get_image_file_name(img_id):
     init_id = '0'*12
     init_id_2 = init_id[:-len(str(img_id))] + str(img_id)
@@ -67,7 +75,9 @@ def get_image_file_name(img_id):
 
 def get_dataloader(
     preprocessed_dictionary: dict,
-    batch_size: int = 100
+    batch_size: int = 100,
+    input_image_size: int = 224,
+    debug: bool = False,
     
 ):
     """
@@ -89,17 +99,37 @@ def get_dataloader(
         database_image_names, 
         image_file_path = "./data/coco/coco2014/train2017/", 
         database_type="coco",
-        input_image_size = 224,
+        input_image_size = input_image_size,
         patchify= False,
         )
     dataloader = DataLoader(dataset, batch_size=batch_size, pin_memory=True, shuffle=False, drop_last=False)
+    
+    if debug:
+        
+        # Create a tensor of ones with shape (Num of Data, 3, 450, 450)
+        ones_tensor = torch.ones(10, 3, 450, 450)
+        
+        class DictTensorDataset(torch.utils.data.Dataset):
+            def __init__(self, tensor):
+                self.tensor = tensor
+            def __len__(self):
+                return self.tensor.shape[0]
+            def __getitem__(self, idx):
+                return {'image': self.tensor[idx],
+                        'category_id': '1,2,3',
+                        'image_id': torch.tensor(idx+1)}
+
+        dataset = DictTensorDataset(ones_tensor)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     
     return dataloader
 
 
 def main(
     dataset_path: str = './lvis/lvis_v1_train_distilled.json',
-    output_path_subfolder: str = './result/all_coco_dataset'
+    output_path_subfolder: str = './result/all_coco_dataset',
+    is_patchify: bool = False, 
+    input_image_size: int = 224,
     ):
     
     # Get the dictionary for data processing
@@ -119,7 +149,7 @@ def main(
         
     # Create the DataLoader
     logging.info("Creating DataLoader for the dataset")
-    dataloader = get_dataloader(img_ids_for_db)
+    dataloader = get_dataloader(img_ids_for_db, batch_size=1 ,input_image_size=input_image_size, debug=False)
     # Load the model
     logging.info("Loading the Q-Former model")
     qformer = EVCap(vit_model="eva_clip_g",
@@ -135,10 +165,10 @@ def main(
             )
     
     qformer.eval()
-    qformer = qformer.to('cuda:0')
+    qformer = qformer.to('cuda:1')
     
     # Load Dictionary for converting category IDs to names
-    id_to_catname = pickle.load(open('./data/coco/coco2014/created_usefull_file/lvis_id_to_catname.pkl', 'rb'))
+    id_to_catname = pickle.load(open('./data/coco/created_usefull_file/lvis_id_to_catname.pkl', 'rb'))
 
     
     logging.info("Start processing the dataset")
@@ -150,14 +180,41 @@ def main(
         for x in tqdm(dataloader):
             
             # move the image to GPU
-            image = x['image'].to('cuda:0')
+            image = x['image'].to('cuda:1')
             
-            # encode the image using Q-Former
-            image_embeddings = qformer.just_encode_img(image)
-            # image_embeddings = image_embeddings.mean(1)
+            if is_patchify:
+                image_patches = torch.stack([patchify(img, patch_size=224) for img in image])
+                
+                # Pad in case not equal to model expected input resolution.
+                p = qformer.visual_encoder.image_size - 224
+                image_patches_pad = torch.nn.functional.pad(
+                    image_patches, (p//2, p//2, p//2, p//2), "constant", 0).to('cuda:1')
+                
+                batch_size, num_patch, c, w, h = image_patches_pad.size()
+                
+                image_patches_pad = image_patches_pad.view(-1, c, w, h)
+                
+                image_embeddings = qformer.just_encode_img(image_patches_pad)
+                
+                image_embeddings = image_embeddings.view(batch_size, num_patch, 32, -1)
+                
+                img_tensor_emb.append(image_embeddings)
+                
+                # for image_b in image_patches_pad:
+                #     image_embeddings_b = qformer.just_encode_img(image_b)
+                    
+                #     img_tensor_emb.append(image_embeddings_b.unsqueeze(0))
+                    
+            else:
             
-            # store the image embeddings
-            img_tensor_emb.append(image_embeddings)
+                # encode the image using Q-Former
+                image_embeddings = qformer.just_encode_img(image)
+                
+                # use mean pooling to get the image embeddings
+                # image_embeddings = image_embeddings.mean(1)
+            
+                # store the image embeddings
+                img_tensor_emb.append(image_embeddings)
             
             # store the image category
             category_list = [[int(cate.strip()) for cate in cate_batch.split(',')] for cate_batch in x['category_id']]
@@ -173,7 +230,7 @@ def main(
     final_tensor = final_tensor.cpu().detach()
     
     # save the embeddings
-    with open(os.path.join(output_path_subfolder,'ext_memory_lvis_distilled_with_img_id.pkl'), 'wb') as f:
+    with open(os.path.join(output_path_subfolder,'ext_memory_lvis_distilled_with_img_id_2x2_patch.pkl'), 'wb') as f:
         pickle.dump([final_tensor, img_tensor_category, img_tensor_id], f)
     
     
@@ -183,16 +240,23 @@ if __name__ == "__main__":
     Script example:
     python -m ext_data.vectorize_image.qformer_vectorize_image
     """
+    import os
+    
+    LOG_FILE_PATH = './ext_data/vectorize_image/log/qformer_vectorize_image_2x2_patch'
+    os.makedirs(LOG_FILE_PATH, exist_ok=True)
+    
     logging.basicConfig(
     level=logging.INFO, 
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Output to terminal
-        logging.FileHandler(f'./ext_data/vectorize_image/log/qformer_vectorize_image_{current_time}.log')  # Output to file
+        logging.FileHandler(f'{LOG_FILE_PATH}/{current_time}.log')  # Output to file
     ]
     )
     main(
         dataset_path = './data/lvis/lvis_v1_train_distilled.json',
-        output_path_subfolder = './ext_data/result/embeddings_32'
+        output_path_subfolder = './ext_data/result/embeddings_32',
+        is_patchify = True,
+        input_image_size = 450,
     )
     
