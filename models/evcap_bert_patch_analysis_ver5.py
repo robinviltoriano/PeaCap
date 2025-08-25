@@ -79,12 +79,6 @@ class EVCap(Blip2Base):
             logging.info("freeze Qformer")
         print('Loading Q-Former Done')
 
-        # self.fusion_transformer = FusionTransformer(
-        #     d_model=self.Qformer.config.hidden_size,
-        #     nhead=12,
-        #     num_layers=2,
-        #     d_ff=3072)
-
         # Caption generation 
         print('Loading LLAMA')
         self.llama_tokenizer = LlamaTokenizer.from_pretrained(llama_model, use_fast=False)
@@ -126,8 +120,14 @@ class EVCap(Blip2Base):
             self.prompt_list = []
         print(ext_path)
         with open(ext_path, 'rb') as f:
-            ext_base_img, self.ext_base_img_id = pickle.load(f)
+            ext_base_img, self.ext_base_img_id, _ = pickle.load(f)
             print(ext_base_img.shape, len(self.ext_base_img_id))
+            
+            #####################################################
+            # This code make the original vector (500, 32, 768) to (500, 32*768) = (500, 24.576)
+            ext_base_img = ext_base_img.view(ext_base_img.shape[0], -1)
+            #####################################################
+            
             feature_library_cpu = ext_base_img.cpu().numpy()
             faiss.normalize_L2(feature_library_cpu)
             self.feat_index = faiss.IndexFlatIP(feature_library_cpu.shape[1])
@@ -197,7 +197,7 @@ class EVCap(Blip2Base):
 
     def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 1, sub_top_k = 3):
         batch_size, nums, dims = query_features.shape
-        query_features = query_features.view(-1,dims)   
+        query_features = query_features.view(batch_size,-1)   
 
         query_features_cpu = query_features.detach().cpu().numpy()
         faiss.normalize_L2(query_features_cpu)
@@ -220,17 +220,36 @@ class EVCap(Blip2Base):
         sorted_batched_ret = []
         for listA, listB in zip(top_k_similarities, re_txt_list_all):
             sorted_listA, indices = listA.sort(descending=True)
-            sorted_listB = [self.pre_name(listB[idx]) for idx in indices]
+            
+            if isinstance(listB[0], str):
+                sorted_listB = [self.pre_name(listB[idx]) for idx in indices]
+            elif isinstance(listB[0], (list, np.ndarray)):
+                sorted_listB = [self.pre_name(item) for idx in indices for item in listB[idx]]
+                
             sorted_listB = sorted_listB[:sub_top_k]
             sorted_batched_ret.append(sorted_listB)
         return sorted_batched_ret
+    
+    def image_text_comparision(self, image_features: torch.Tensor, text: list) -> torch.Tensor:
+        """
+        Compute the similarity between image patch and retrieved text.
+        This will become the weight for each text
+        
+        Args:
+            image_features (torch.Tensor): Image features of shape (num_patches, 32, 768)
+            text (list): List of retrieved text corresponding to each image patch
+            
+        Returns:
+            torch.Tensor: Similarity scores of shape 
+        """
+        ...
 
 
     def encode_img(self, image):
         device = image.device
-        if self.low_resource:
-            self.vit_to_cpu()
-            image = image.to("cpu")
+        # if self.low_resource:
+        #     self.vit_to_cpu()
+        #     image = image.to("cpu")
 
         with self.maybe_autocast():
             image_patches = torch.stack([self.patchify(img, patch_size=self.patch_size) for img in image])
@@ -239,7 +258,6 @@ class EVCap(Blip2Base):
             image_patches_pad = torch.nn.functional.pad(
                 image_patches, (p//2, p//2, p//2, p//2), "constant", 0).to(self.device)
             
-            query_output_img_stack = []
             re_txt_list_all = []
             
             for image_p in image_patches_pad:
@@ -253,19 +271,15 @@ class EVCap(Blip2Base):
                     encoder_attention_mask=image_atts,
                     return_dict=True,
                 )
-                query_output_img = query_outputs_img.last_hidden_state
-                # query_output_img_projection = self.qformer_proj(query_output_img.permute(0,2,1)).permute(0,2,1)
-                # query_output_img_atts = torch.ones(query_output_img.size()[:-1], dtype=torch.long).to(device)
+                query_output_img = query_outputs_img.last_hidden_state #(num_patch, num_query, qformer_dim)
+
                 re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
-                re_txt_list_all_per_patch_flat = list(set(np.array(re_txt_list_all_per_patch, dtype=object).flatten()))
+                re_txt_list_all_per_patch_flat = list(np.array(re_txt_list_all_per_patch, dtype=object).flatten())
                 
                 
                 re_txt_list_all.append(re_txt_list_all_per_patch_flat)
                 
                 del query_output_img
-                
-                # Append the outputs to the stacks
-                # query_output_img_stack.append(query_output_img)
                             
             re_txt_list_batch = []
             for sublist in re_txt_list_all:
@@ -303,7 +317,6 @@ class EVCap(Blip2Base):
                     return_tensors="pt",
                 ).to(image.device)
 
-
             text_output = self.Qformer.bert(
                 text.input_ids,
                 attention_mask=text.attention_mask,
@@ -312,7 +325,6 @@ class EVCap(Blip2Base):
             query_output_txt = text_output.last_hidden_state[:, 0, :]
             
             query_output_all = torch.cat([query_output_img_224, query_output_txt.unsqueeze(1)], dim=1) 
-            # fusion_query_all = self.fusion_transformer(query_output_img_224, query_output_txt.unsqueeze(1))
             qform_all_proj = self.llama_proj(query_output_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
         return qform_all_proj, atts_qform_all_proj
@@ -378,16 +390,15 @@ if __name__ == "__main__":
 
     from dataset.coco_dataset import COCODataset
     from torch.utils.data import DataLoader
-    device = 'cpu'
+    device = 'cuda:0'
     data_root = 'data/coco/coco2014'
     image_resize = 680
-    dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_in_scope.json', resize=image_resize)
+    dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_sampled.json', resize=image_resize)
     model_type = "lmsys/vicuna-7b-v1.3"
     model = EVCap(
-            ext_path= 'ext_data/ext_memory_original_sample.pkl',
+            ext_path= 'ext_data/result/embeddings_32/ext_memory_lvis_distilled_with_img_id.pkl',
             vit_model="eva_clip_g",
             q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
-            img_size=image_resize,
             patch_size=224,
             drop_path_rate=0,
             use_grad_checkpoint=False,
@@ -395,15 +406,14 @@ if __name__ == "__main__":
             freeze_vit=True,
             freeze_qformer=True,
             num_query_token=32,
-            num_query_token_txt=8,
-            topn = 9,
+            topn = 26,
             llama_model=model_type,
             prompt_path="prompts/prompt_evcap.txt",
             prompt_template='###Human: {} ###Assistant: ',
             max_txt_len=128,
             end_sym='\n',
             low_resource=True,  # use 8 bit and put vit in cpu ##
-            device_8bit=1,  # the device of 8bit model should be set when loading and cannot be changed anymore.
+            device_8bit=0,  # the device of 8bit model should be set when loading and cannot be changed anymore.
     )
     model = model.to(device)
     train_dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, sampler=None,shuffle=False, drop_last=True)
