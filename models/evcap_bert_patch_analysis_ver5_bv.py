@@ -1,0 +1,423 @@
+import logging
+import numpy as np
+import torch
+from torch.cuda.amp import autocast as autocast
+import torch.nn as nn
+import random
+from models.blip2 import Blip2Base, disabled_train
+from models.modeling_llama import LlamaForCausalLM
+from transformers import LlamaTokenizer
+import pickle
+import faiss
+import re
+from torch.nn import functional as F
+# from models.FusionTransformer import FusionTransformer
+
+
+class EVCap(Blip2Base):
+    
+    def __init__(
+        self,
+        ext_path,
+        vit_model="eva_clip_g",
+        q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
+        patch_size=224,
+        drop_path_rate=0,
+        use_grad_checkpoint=False,
+        vit_precision="fp16",
+        freeze_vit=True,
+        freeze_qformer=True,
+        num_query_token=32,
+        topn=9,
+        llama_model="",
+        prompt_path="prompts/prompt_evcap.txt",
+        prompt_template='###Human: {} ###Assistant: ',
+        max_txt_len=160,
+        end_sym='\n',
+        low_resource=False,
+        device_8bit=0,
+    ):
+        super().__init__()
+
+        self.low_resource = low_resource
+        self.patch_size = patch_size
+        self.topn = topn
+        print('topn:', self.topn)
+
+        ##### Image 
+        print('Loading VIT')
+        self.visual_encoder, self.ln_vision = self.init_vision_encoder(
+            vit_model, patch_size, drop_path_rate, use_grad_checkpoint, vit_precision
+        )
+        if freeze_vit:
+            for name, param in self.visual_encoder.named_parameters():
+                param.requires_grad = False
+            self.visual_encoder = self.visual_encoder.eval()
+            self.visual_encoder.train = disabled_train
+            for name, param in self.ln_vision.named_parameters():
+                param.requires_grad = False
+            self.ln_vision = self.ln_vision.eval()
+            self.ln_vision.train = disabled_train
+            logging.info("freeze vision encoder")
+        print('Loading VIT Done')
+
+        print('Loading Q-Former')
+        self.Qformer, self.query_tokens = self.init_Qformer(
+            num_query_token, self.visual_encoder.num_features
+        )
+        
+        self.bert_tokenizer = self.init_tokenizer()
+        self.Qformer.resize_token_embeddings(len(self.bert_tokenizer))
+        self.load_from_pretrained(url_or_filename=q_former_model)
+
+        if freeze_qformer:
+            for name, param in self.Qformer.named_parameters():
+                param.requires_grad = False
+            self.Qformer = self.Qformer.eval()
+            self.Qformer.train = disabled_train
+            self.query_tokens.requires_grad = True
+            logging.info("freeze Qformer")
+        print('Loading Q-Former Done')
+
+        # Caption generation 
+        print('Loading LLAMA')
+        self.llama_tokenizer = LlamaTokenizer.from_pretrained(llama_model, use_fast=False)
+        self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token
+
+        if self.low_resource:
+            self.llama_model = LlamaForCausalLM.from_pretrained(
+                llama_model,
+                torch_dtype=torch.float16,
+                load_in_8bit=True,
+                device_map={'': device_8bit}
+            )
+        else:
+            self.llama_model = LlamaForCausalLM.from_pretrained(
+                llama_model,
+                torch_dtype=torch.float16,
+            )
+
+        for name, param in self.llama_model.named_parameters():
+            param.requires_grad = False
+        print('Loading LLAMA Done')
+
+        
+        self.llama_proj = nn.Linear(
+            self.Qformer.config.hidden_size, self.llama_model.config.hidden_size
+        )
+
+        self.max_txt_len = max_txt_len
+        self.end_sym = end_sym
+
+        if prompt_path:
+            with open(prompt_path, 'r') as f:
+                raw_prompts = f.read().splitlines()
+            filted_prompts = [raw_prompt for raw_prompt in raw_prompts if "<ImageHere>" in raw_prompt]
+            self.prompt_list = [prompt_template.format(p) for p in filted_prompts]
+            print('Load {} training prompts'.format(len(self.prompt_list)))
+            print('Prompt Example \n{}'.format(random.choice(self.prompt_list)))
+        else:
+            self.prompt_list = []
+        print(ext_path)
+        with open(ext_path, 'rb') as f:
+            ext_base_img, self.ext_base_img_id, _ = pickle.load(f)
+            print(ext_base_img.shape, len(self.ext_base_img_id))
+            
+            #####################################################
+            # This code make the original vector (500, 32, 768) to (500, 32*768) = (500, 24.576)
+            ext_base_img = ext_base_img.view(ext_base_img.shape[0], -1)
+            #####################################################
+            
+            feature_library_cpu = ext_base_img.cpu().numpy()
+            faiss.normalize_L2(feature_library_cpu)
+            self.feat_index = faiss.IndexFlatIP(feature_library_cpu.shape[1])
+            self.feat_index.add(feature_library_cpu)
+            print(f"loaded external base image")
+
+
+    def patchify(self, image_tensor, patch_size, patch_stride=None):
+        if patch_stride is None:
+            patch_stride = patch_size
+        patches = image_tensor.unfold(
+            1, patch_size, patch_stride).unfold(2, patch_size, patch_stride)
+        patches = patches.reshape(3, -1, patch_size, patch_size).permute(1, 0, 2, 3)
+        return patches 
+    
+    def vit_to_cpu(self):
+        self.ln_vision.to("cpu")
+        self.ln_vision.float()
+        self.visual_encoder.to("cpu")
+        self.visual_encoder.float()
+
+
+    def prompt_wrap(self, img_embeds, atts_img, prompt_list):
+        if prompt_list:
+            batch_size = img_embeds.shape[0]
+            emb_lists = []
+            for i in range(batch_size):
+                prompt = random.choice(prompt_list)
+                p_before, p_after = prompt.split("<ImageHere>", 1)
+                self.llama_tokenizer.padding_side = "right"
+                p_before_tokens = self.llama_tokenizer(
+                    p_before, return_tensors="pt", add_special_tokens=False).to(img_embeds.device)
+                p_after_tokens = self.llama_tokenizer(
+                    p_after, return_tensors="pt", add_special_tokens=False).to(img_embeds.device)        
+                p_before_embeds = self.llama_model.model.embed_tokens(p_before_tokens.input_ids)
+                p_after_embeds = self.llama_model.model.embed_tokens(p_after_tokens.input_ids)
+                img_embeds_i = img_embeds[i].unsqueeze(0)
+                wrapped_embed_i = torch.cat([p_before_embeds, img_embeds_i, p_after_embeds], dim=1)
+                emb_lists.append(wrapped_embed_i)  
+
+            emb_lens = [emb.shape[1] for emb in emb_lists]
+            pad_emb = self.llama_model.model.embed_tokens(torch.tensor(self.llama_tokenizer.pad_token_id, device=img_embeds.device))
+            wrapped_embs = pad_emb.expand(len(emb_lens), max(emb_lens), -1).clone()
+            wrapped_atts = torch.zeros([len(emb_lens), max(emb_lens)], dtype=torch.int, device=img_embeds.device)
+            for i, emb in enumerate(emb_lists):
+                wrapped_embs[i, :emb_lens[i]] = emb
+                wrapped_atts[i, :emb_lens[i]] = 1
+            return wrapped_embs, wrapped_atts
+        else:
+            return img_embeds, atts_img
+
+
+    def pre_name(self, caption):
+        caption = re.sub(
+            r"([_!,'\"()*#:;~])",
+            " ",
+            caption.lower(),
+        )
+        caption = re.sub(
+            r"\s{2,}",
+            " ",
+            caption,
+        )
+        caption = caption.rstrip("\n")
+        caption = caption.strip(" ")
+        return caption
+
+    def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 1, sub_top_k = 3):
+        batch_size, nums, dims = query_features.shape
+        query_features = query_features.view(batch_size,-1)   
+
+        query_features_cpu = query_features.detach().cpu().numpy()
+        faiss.normalize_L2(query_features_cpu)
+        top_k_similarities, top_k_indices = feat_index.search(query_features_cpu, top_k)
+
+        top_k_indices = torch.tensor(top_k_indices).to(device = query_features.device)
+        top_k_similarities = torch.tensor(top_k_similarities).to(device = query_features.device)
+        top_k_similarities = top_k_similarities.view(batch_size, -1)
+
+        indices = top_k_indices.view(batch_size, -1)
+
+        re_txt_list_all = []    
+        for batch_i in range(batch_size):
+            indices_list = indices[batch_i]
+            re_txt_batch_list = []
+            for i in indices_list: 
+                re_txt_batch_list.append(image_id[i])
+            re_txt_list_all.append(re_txt_batch_list)
+         
+        sorted_batched_ret = []
+        for listA, listB in zip(top_k_similarities, re_txt_list_all):
+            sorted_listA, indices = listA.sort(descending=True)
+            
+            if isinstance(listB[0], str):
+                sorted_listB = [self.pre_name(listB[idx]) for idx in indices]
+            elif isinstance(listB[0], (list, np.ndarray)):
+                sorted_listB = [self.pre_name(item) for idx in indices for item in listB[idx]]
+                
+            sorted_listB = sorted_listB[:sub_top_k]
+            sorted_batched_ret.append(sorted_listB)
+        return sorted_batched_ret
+    
+    def image_text_comparision(self, image_features: torch.Tensor, text: list) -> torch.Tensor:
+        """
+        Compute the similarity between image patch and retrieved text.
+        This will become the weight for each text
+        
+        Args:
+            image_features (torch.Tensor): Image features of shape (num_patches, 32, 768)
+            text (list): List of retrieved text corresponding to each image patch
+            
+        Returns:
+            torch.Tensor: Similarity scores of shape 
+        """
+        ...
+
+
+    def encode_img(self, image):
+        device = image.device
+        # if self.low_resource:
+        #     self.vit_to_cpu()
+        #     image = image.to("cpu")
+
+        with self.maybe_autocast():
+            image_patches = torch.stack([self.patchify(img, patch_size=self.patch_size) for img in image])
+            # Pad in case not equal to model expected input resolution.
+            p = self.visual_encoder.image_size - self.patch_size
+            image_patches_pad = torch.nn.functional.pad(
+                image_patches, (p//2, p//2, p//2, p//2), "constant", 0).to(self.device)
+            
+            re_txt_list_all = []
+            
+            for image_p in image_patches_pad:
+                image_embeds = self.ln_vision(self.visual_encoder(image_p)).to(device)
+                image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
+
+                query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+                query_outputs_img = self.Qformer.bert(
+                    query_embeds=query_tokens,
+                    encoder_hidden_states=image_embeds,
+                    encoder_attention_mask=image_atts,
+                    return_dict=True,
+                )
+                query_output_img = query_outputs_img.last_hidden_state #(num_patch, num_query, qformer_dim)
+
+                re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
+                re_txt_list_all_per_patch_flat = list(np.concatenate(re_txt_list_all_per_patch, dtype=object))
+                
+                re_txt_list_all.append(re_txt_list_all_per_patch_flat)
+                
+                del query_output_img
+                            
+            re_txt_list_batch = []
+            for sublist in re_txt_list_all:
+                sublist_new = []
+                for item in sublist:
+                    if item not in sublist_new:
+                        sublist_new.append(item)
+                        if len(sublist_new)>self.topn: 
+                            break      
+                re_txt_list_batch.append(" [SEP] ".join(sublist_new))
+                
+            # Use whole image for QFormer embedding
+            resize_image = F.interpolate(
+                image, 
+                size=(self.patch_size, self.patch_size), 
+                mode='bilinear', align_corners=False
+            )
+            image_embeds = self.ln_vision(self.visual_encoder(resize_image)).to(device)
+            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(device)
+            
+            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+            query_outputs_img_224 = self.Qformer.bert(
+                    query_embeds=query_tokens,
+                    encoder_hidden_states=image_embeds,
+                    encoder_attention_mask=image_atts,
+                    return_dict=True,
+                )
+            query_output_img_224 = query_outputs_img_224.last_hidden_state
+                
+            text = self.bert_tokenizer(
+                    re_txt_list_batch,
+                    truncation=True,
+                    padding="longest",
+                    max_length=self.max_txt_len,
+                    return_tensors="pt",
+                ).to(image.device)
+
+            text_output = self.Qformer.bert(
+                text.input_ids,
+                attention_mask=text.attention_mask,
+                return_dict=True,
+            )
+            query_output_txt = text_output.last_hidden_state[:, 0, :]
+            
+            query_output_all = torch.cat([query_output_img_224, query_output_txt.unsqueeze(1)], dim=1) 
+            qform_all_proj = self.llama_proj(query_output_all)
+            atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
+        return qform_all_proj, atts_qform_all_proj
+
+
+    def forward(self, samples):
+        ##### Image
+        image = samples["image"]
+        qform_all_proj, atts_qform_all_proj = self.encode_img(image)
+        if self.prompt_list:
+            prompt_embeds, atts_prompt = self.prompt_wrap(qform_all_proj, atts_qform_all_proj, self.prompt_list) #(self, img_embeds, batch_names, atts_img, prompt_list):
+
+        ##### Caption generation
+        self.llama_tokenizer.padding_side = "right"
+        text = [t + self.end_sym for t in samples["text_input"]]
+        text_tokens = self.llama_tokenizer(
+            text,
+            return_tensors="pt",
+            padding="longest",
+            truncation=True,
+            max_length=self.max_txt_len,
+            add_special_tokens=False
+        ).to(image.device)
+
+
+        bos = torch.ones([qform_all_proj.shape[0], 1],
+                         dtype=text_tokens.input_ids.dtype,
+                         device=text_tokens.input_ids.device) * self.llama_tokenizer.bos_token_id
+        bos_embeds = self.llama_model.model.embed_tokens(bos)
+        atts_bos = atts_qform_all_proj[:, :1]
+
+
+        targets = text_tokens.input_ids.masked_fill(
+            text_tokens.input_ids == self.llama_tokenizer.pad_token_id, -100
+        )
+        empty_targets = (
+            torch.ones([qform_all_proj.shape[0], 1 + prompt_embeds.shape[1]], 
+                       dtype=torch.long).to(image.device).fill_(-100)  
+        )
+        targets = torch.cat([empty_targets, targets], dim=1)
+        text_embeds = self.llama_model.model.embed_tokens(text_tokens.input_ids)
+        
+        inputs_embeds = torch.cat([bos_embeds, prompt_embeds, text_embeds], dim=1)
+        attention_mask = torch.cat([atts_bos, atts_prompt, text_tokens.attention_mask], dim=1)
+
+        with self.maybe_autocast():
+            outputs = self.llama_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                return_dict=True,
+                labels=targets,
+            )
+        loss = outputs.loss
+
+        return {"output": outputs[0], "loss": loss}
+    
+if __name__ == "__main__":
+    """
+    This code is for testing the EVCap model.
+    It initializes the model and runs a forward pass with dummy data.
+    It is not intended for production use.
+    """
+
+    from dataset.coco_dataset import COCODataset
+    from torch.utils.data import DataLoader
+    device = 'cuda:0'
+    data_root = 'data/coco/coco2014'
+    image_resize = 680
+    dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_sampled.json', resize=image_resize)
+    model_type = "lmsys/vicuna-7b-v1.3"
+    model = EVCap(
+            ext_path= 'ext_data/result/embeddings_32/ext_memory_lvis_distilled_with_img_id.pkl',
+            vit_model="eva_clip_g",
+            q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
+            patch_size=224,
+            drop_path_rate=0,
+            use_grad_checkpoint=False,
+            vit_precision="fp16",
+            freeze_vit=True,
+            freeze_qformer=True,
+            num_query_token=32,
+            topn = 26,
+            llama_model=model_type,
+            prompt_path="prompts/prompt_evcap.txt",
+            prompt_template='###Human: {} ###Assistant: ',
+            max_txt_len=128,
+            end_sym='\n',
+            low_resource=True,  # use 8 bit and put vit in cpu ##
+            device_8bit=0,  # the device of 8bit model should be set when loading and cannot be changed anymore.
+    )
+    model = model.to(device)
+    train_dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, sampler=None,shuffle=False, drop_last=True)
+
+    for idx, samples in enumerate(train_dataloader):
+        print(f"Processing sample {idx}")
+        samples['image'] = samples['image'].to(device)
+        output = model(samples)["loss"]
