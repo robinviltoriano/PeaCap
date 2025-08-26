@@ -35,3 +35,4 @@ dataset/result/sample_data/images/captions_val2014_sampled_005_sampling_statisti
 evaluation/*
 
 .env
+secrets.txt
