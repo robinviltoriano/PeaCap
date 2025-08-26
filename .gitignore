@@ -1,4 +1,18 @@
-data/*
+# data/*
+
+data/lvis/** 
+data/coco/coco2014/**
+data/coco/created_usefull_file/**
+data/coco/karpathy/**
+
+# But don’t ignore these two files
+# Unignore the folders leading to the files
+!data/
+!data/coco/
+!data/coco/coco2014/
+!data/coco/coco2014/annotations/
+!data/coco/coco2014/annotations/captions_train2014_sampled.json
+!data/coco/coco2014/annotations/captions_val2014_sampled_005_fixed_format.json
 
 dataset/notebook/*
 
@@ -10,9 +24,14 @@ __pycache__/
 
 launch.json
 
-ext_data/result/*.pkl
-ext_data/result/*.json
+ext_data/**/*.pkl
+ext_data/**/*.json
+ext_data/**/*.h5
+
+!ext_data/ext_memory_lvis.pkl
+
 prompts/prompt_evcap_with_obj_tags.txt
+
 
 **/model_config_and_arguments.json
 
@@ -26,8 +45,6 @@ results/EVAL/**/*.json
 results/**/*.jpg 
 results/**/*.png
 results/**/*.pt
-
-ext_data/**/*.pkl
 
 **/training_metrics.json
 dataset/result/sample_data/images/captions_val2014_sampled_005_sampling_statistics.png
