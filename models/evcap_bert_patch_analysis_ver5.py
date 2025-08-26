@@ -274,8 +274,7 @@ class EVCap(Blip2Base):
                 query_output_img = query_outputs_img.last_hidden_state #(num_patch, num_query, qformer_dim)
 
                 re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
-                re_txt_list_all_per_patch_flat = list(np.array(re_txt_list_all_per_patch, dtype=object).flatten())
-                
+                re_txt_list_all_per_patch_flat = list(np.concatenate(re_txt_list_all_per_patch, dtype=object))
                 
                 re_txt_list_all.append(re_txt_list_all_per_patch_flat)
                 
@@ -288,7 +287,7 @@ class EVCap(Blip2Base):
                     if item not in sublist_new:
                         sublist_new.append(item)
                         if len(sublist_new)>self.topn: 
-                            break
+                            break      
                 re_txt_list_batch.append(" [SEP] ".join(sublist_new))
                 
             # Use whole image for QFormer embedding
