@@ -12,6 +12,7 @@ import faiss
 import re
 from torch.nn import functional as F
 # from models.FusionTransformer import FusionTransformer
+from models.CrossAttention import CrossAttentionTransformer
 
 
 class EVCap(Blip2Base):
@@ -101,7 +102,22 @@ class EVCap(Blip2Base):
             param.requires_grad = False
         print('Loading LLAMA Done')
 
+        # add a MLP layer to enhance the Q-Former features
+        # self.mlp_layer = nn.Sequential(
+        #     nn.Linear(self.Qformer.config.hidden_size, self.Qformer.config.hidden_size),
+        #     nn.GELU(),
+        #     nn.Linear(self.Qformer.config.hidden_size, self.Qformer.config.hidden_size),
+        # )
         
+        # add a cross attention transformer to fuse the image and text features
+        self.cross_att = CrossAttentionTransformer(
+            d_model=self.Qformer.config.hidden_size, 
+            nhead=12, 
+            num_layers=2, 
+            d_ff=self.Qformer.config.hidden_size * 4
+        )
+
+         # add a projection layer to connect Q-Former and LLaMA
         self.llama_proj = nn.Linear(
             self.Qformer.config.hidden_size, self.llama_model.config.hidden_size
         )
@@ -120,14 +136,8 @@ class EVCap(Blip2Base):
             self.prompt_list = []
         print(ext_path)
         with open(ext_path, 'rb') as f:
-            ext_base_img, self.ext_base_img_id, _ = pickle.load(f)
+            ext_base_img, self.ext_base_img_id = pickle.load(f)
             print(ext_base_img.shape, len(self.ext_base_img_id))
-            
-            #####################################################
-            # This code make the original vector (500, 32, 768) to (500, 32*768) = (500, 24.576)
-            ext_base_img = ext_base_img.view(ext_base_img.shape[0], -1)
-            #####################################################
-            
             feature_library_cpu = ext_base_img.cpu().numpy()
             faiss.normalize_L2(feature_library_cpu)
             self.feat_index = faiss.IndexFlatIP(feature_library_cpu.shape[1])
@@ -197,7 +207,7 @@ class EVCap(Blip2Base):
 
     def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 1, sub_top_k = 3):
         batch_size, nums, dims = query_features.shape
-        query_features = query_features.view(batch_size,-1)   
+        query_features = query_features.view(-1,dims)   
 
         query_features_cpu = query_features.detach().cpu().numpy()
         faiss.normalize_L2(query_features_cpu)
@@ -220,29 +230,10 @@ class EVCap(Blip2Base):
         sorted_batched_ret = []
         for listA, listB in zip(top_k_similarities, re_txt_list_all):
             sorted_listA, indices = listA.sort(descending=True)
-            
-            if isinstance(listB[0], str):
-                sorted_listB = [self.pre_name(listB[idx]) for idx in indices]
-            elif isinstance(listB[0], (list, np.ndarray)):
-                sorted_listB = [self.pre_name(item) for idx in indices for item in listB[idx]]
-                
+            sorted_listB = [self.pre_name(listB[idx]) for idx in indices]
             sorted_listB = sorted_listB[:sub_top_k]
             sorted_batched_ret.append(sorted_listB)
         return sorted_batched_ret
-    
-    def image_text_comparision(self, image_features: torch.Tensor, text: list) -> torch.Tensor:
-        """
-        Compute the similarity between image patch and retrieved text.
-        This will become the weight for each text
-        
-        Args:
-            image_features (torch.Tensor): Image features of shape (num_patches, 32, 768)
-            text (list): List of retrieved text corresponding to each image patch
-            
-        Returns:
-            torch.Tensor: Similarity scores of shape 
-        """
-        ...
 
 
     def encode_img(self, image):
@@ -274,7 +265,7 @@ class EVCap(Blip2Base):
                 query_output_img = query_outputs_img.last_hidden_state #(num_patch, num_query, qformer_dim)
 
                 re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
-                re_txt_list_all_per_patch_flat = list(np.concatenate(re_txt_list_all_per_patch, dtype=object))
+                re_txt_list_all_per_patch_flat = list(np.array(re_txt_list_all_per_patch, dtype=object).flatten())
                 
                 re_txt_list_all.append(re_txt_list_all_per_patch_flat)
                 
@@ -323,7 +314,9 @@ class EVCap(Blip2Base):
             )
             query_output_txt = text_output.last_hidden_state[:, 0, :]
             
-            query_output_all = torch.cat([query_output_img_224, query_output_txt.unsqueeze(1)], dim=1) 
+            # query_output_all = torch.cat([query_output_img_224, query_output_txt.unsqueeze(1)], dim=1) 
+            # query_output_all = self.mlp_layer(query_output_all)
+            query_output_all = self.cross_att(query_output_img_224, query_output_txt.unsqueeze(1))
             qform_all_proj = self.llama_proj(query_output_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
         return qform_all_proj, atts_qform_all_proj
@@ -395,7 +388,7 @@ if __name__ == "__main__":
     dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_sampled.json', resize=image_resize)
     model_type = "lmsys/vicuna-7b-v1.3"
     model = EVCap(
-            ext_path= 'ext_data/result/embeddings_32/ext_memory_lvis_distilled_with_img_id.pkl',
+            ext_path= 'ext_data/ext_memory_lvis.pkl',
             vit_model="eva_clip_g",
             q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",
             patch_size=224,
@@ -405,7 +398,7 @@ if __name__ == "__main__":
             freeze_vit=True,
             freeze_qformer=True,
             num_query_token=32,
-            topn = 26,
+            topn = 9,
             llama_model=model_type,
             prompt_path="prompts/prompt_evcap.txt",
             prompt_template='###Human: {} ###Assistant: ',

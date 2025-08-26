@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # TRAINING
-EXP_NAME='evcap_bert_patch_analysis_ver5_bv'
+EXP_NAME='evcap_bert_patch_analysis_ver5_dot_2'
 TIME_START=$(date "+%d-%m-%Y_%H:%M:%S")
 LOG_FOLDER=logs
 SUB_FOLDER=SAMPLE
@@ -12,13 +12,13 @@ TRAIN_LOG_FILE="$LOG_FOLDER/TRAIN/${SUB_FOLDER}/${EXP_NAME}/TRAINING_${TIME_STAR
 
 # MODEL CONFIGURATION
 model_path="models.evcap_bert_patch_analysis_ver5"
-ext_path="ext_data/result/embeddings_32/ext_memory_lvis_distilled_with_img_id.pkl"
+ext_path="ext_data/ext_memory_lvis.pkl"
 input_image_resize=680  
 bs=1
 accum_grad_iters=1
+topn=9
 
-
-CUDA_VISIBLE_DEVICES="0" torchrun --nproc_per_node 1 ./train_evcap_bert_patch.py \
+CUDA_VISIBLE_DEVICES="0,1" torchrun --nproc_per_node 2 ./train_evcap_bert_patch.py \
     --model_path ${model_path} \
     --input_image_resize ${input_image_resize} \
     --ext_path ${ext_path} \
@@ -28,7 +28,7 @@ CUDA_VISIBLE_DEVICES="0" torchrun --nproc_per_node 1 ./train_evcap_bert_patch.py
     --accum_grad_iters ${accum_grad_iters} \
     --log_folder $SAVE_FILE \
     --low_resource false \
-    --topn 26 \
+    --topn ${topn} \
     |& tee -a  ${TRAIN_LOG_FILE} \
 && {
     # EVALUATION
@@ -60,6 +60,7 @@ CUDA_VISIBLE_DEVICES="0" torchrun --nproc_per_node 1 ./train_evcap_bert_patch.py
     --out_path=$NOCAPS_OUT_PATH \
     --ckpt ${ckpt} \
     --ext_data_path ${ext_path} \
+    --topn ${topn} \
     --log_folder ${LOG_FOLDER} \
     |& tee -a  ${NOCAPS_LOG_FILE}
 
