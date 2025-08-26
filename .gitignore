@@ -31,3 +31,5 @@ ext_data/**/*.pkl
 
 **/training_metrics.json
 dataset/result/sample_data/images/captions_val2014_sampled_005_sampling_statistics.png
+
+evaluation/*
