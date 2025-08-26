@@ -52,9 +52,9 @@ def validation_whoops(
 ) -> None:
 
     device = args.device
-
+    HF_TOKEN = os.getenv("HF_TOKEN")
     predicts = []
-    examples = load_dataset('nlphuji/whoops', token='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')
+    examples = load_dataset('nlphuji/whoops', token=HF_TOKEN)
     model.eval()
     for example in examples['test']:
         image_id = example['image_id']
