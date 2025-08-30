@@ -12,7 +12,7 @@ import faiss
 import re
 from torch.nn import functional as F
 # from models.FusionTransformer import FusionTransformer
-
+from models.CrossAttention import CrossAttentionTransformer
 
 class EVCap(Blip2Base):
     
@@ -100,7 +100,14 @@ class EVCap(Blip2Base):
         for name, param in self.llama_model.named_parameters():
             param.requires_grad = False
         print('Loading LLAMA Done')
-
+        
+        # add a cross attention transformer to fuse the image and text features
+        self.cross_att = CrossAttentionTransformer(
+            d_model=self.Qformer.config.hidden_size, 
+            nhead=12, 
+            num_layers=2, 
+            d_ff=self.Qformer.config.hidden_size * 4
+        )
         
         self.llama_proj = nn.Linear(
             self.Qformer.config.hidden_size, self.llama_model.config.hidden_size
@@ -195,7 +202,7 @@ class EVCap(Blip2Base):
         caption = caption.strip(" ")
         return caption
 
-    def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 1, sub_top_k = 3):
+    def retrieve_similar_features(self, query_features, feat_index, image_id, top_k = 2, sub_top_k = 10):
         batch_size, nums, dims = query_features.shape
         query_features = query_features.view(batch_size,-1)   
 
@@ -230,20 +237,67 @@ class EVCap(Blip2Base):
             sorted_batched_ret.append(sorted_listB)
         return sorted_batched_ret
     
-    def image_text_comparision(self, image_features: torch.Tensor, text: list) -> torch.Tensor:
-        """
-        Compute the similarity between image patch and retrieved text.
-        This will become the weight for each text
+    # def image_text_comparision(self, image_features: torch.Tensor, tags: list, temp: float=0.07) -> torch.Tensor:
+    #     """
+    #     Compute the similarity between image patch and retrieved text.
+    #     This will become the weight for each text
         
-        Args:
-            image_features (torch.Tensor): Image features of shape (num_patches, 32, 768)
-            text (list): List of retrieved text corresponding to each image patch
+    #     Args:
+    #         image_features (torch.Tensor): Image features of shape (num_patches, 32, 768)
+    #         text (list): List of retrieved text corresponding to each image patch
             
-        Returns:
-            torch.Tensor: Similarity scores of shape 
-        """
-        ...
+    #     Returns:
+    #         torch.Tensor: Similarity scores of shape 
+    #     """
+    #     result = []
+        
+    #     for patch, tag in zip(image_features, tags):
+    #         image_feat = F.normalize(self.vision_proj(patch[0, :]), dim=-1)
+            
+    #         text = self.bert_tokenizer(
+    #             tag,
+    #             padding="longest",
+    #             truncation=True,
+    #             max_length=self.max_txt_len,
+    #             return_tensors="pt",
+    #         ).to(image_features.device)
 
+    #         text_output = self.Qformer.bert(
+    #             text.input_ids,
+    #             attention_mask=text.attention_mask,
+    #             return_dict=True,
+    #         )
+    #         text_embeds = text_output.last_hidden_state
+    #         text_feat = F.normalize(self.text_proj(text_embeds[:, 0, :]), dim=-1)
+                                    
+    #         # Image-to-text similarity: [32, 768] x [768, T] → [32, T]
+    #         sim_i2t = image_feat @ text_feat.t()
+    #         # Aggregate across query tokens (best alignment for each tag)
+    #         # sim_i2t, _ = sim_q2t.mean(0)
+    #         # sim_i2t = sim_i2t / temp
+                
+    #         # # Text-to-image similarity
+    #         # sim_t2q = torch.matmul(
+    #         #         text_feat.unsqueeze(1),           # [num_objects, 1, embed_dim]
+    #         #         image_feats.squeeze(0).t()        # [embed_dim, num_query_tokens]
+    #         #     ).squeeze(1)  # [num_objects, num_query_tokens]
+                
+    #         # sim_t2i, _ = sim_t2q.max(-1)  # [num_objects]
+    #         # sim_t2i = sim_t2i / temp
+            
+    #         # # Combine similarities (average or weighted)
+    #         # combined_sim = (sim_i2t + sim_t2i) / 2
+            
+    #         # # Apply softmax
+    #         # probs = F.softmax(combined_sim, dim=0)
+            
+    #         # Select top-N
+    #         _, top_idxs = sim_i2t.topk(2)
+            
+    #         best_tag = [tag[i] for i in top_idxs.tolist()]
+    #         result.extend(best_tag)
+            
+    #     return result
 
     def encode_img(self, image):
         device = image.device
@@ -274,6 +328,10 @@ class EVCap(Blip2Base):
                 query_output_img = query_outputs_img.last_hidden_state #(num_patch, num_query, qformer_dim)
 
                 re_txt_list_all_per_patch  = self.retrieve_similar_features(query_output_img, self.feat_index, self.ext_base_img_id)
+                
+                # Filter retrieved text
+                # filtered_re_txt_list_all_per_patch = self.image_text_comparision(query_output_img, re_txt_list_all_per_patch, temp=0.07)
+                #
                 re_txt_list_all_per_patch_flat = list(np.concatenate(re_txt_list_all_per_patch, dtype=object))
                 
                 re_txt_list_all.append(re_txt_list_all_per_patch_flat)
@@ -323,7 +381,7 @@ class EVCap(Blip2Base):
             )
             query_output_txt = text_output.last_hidden_state[:, 0, :]
             
-            query_output_all = torch.cat([query_output_img_224, query_output_txt.unsqueeze(1)], dim=1) 
+            query_output_all = self.cross_att(query_output_img_224, query_output_txt.unsqueeze(1))
             qform_all_proj = self.llama_proj(query_output_all)
             atts_qform_all_proj = torch.ones(qform_all_proj.size()[:-1], dtype=torch.long).to(device)
         return qform_all_proj, atts_qform_all_proj
