@@ -1,59 +1,61 @@
 #!/bin/bash
 
 # TRAINING
-EXP_NAME='evcap_bert_patch_analysis_ver5_dot_2'
+EXP_NAME='evcap_bert_patch_analysis_ver5'
 TIME_START=$(date "+%d-%m-%Y_%H:%M:%S")
 LOG_FOLDER=logs
-SUB_FOLDER=SAMPLE
+SUB_FOLDER=FULL_DATA
 SAVE_FILE=${LOG_FOLDER}/TRAIN/${SUB_FOLDER}/${EXP_NAME}
 mkdir -p $SAVE_FILE 
 
 TRAIN_LOG_FILE="$LOG_FOLDER/TRAIN/${SUB_FOLDER}/${EXP_NAME}/TRAINING_${TIME_START}.log"
 
-# MODEL CONFIGURATION
+#######################################################################################
+# MODEL CONFIGURATION (Need to be adjusted)
 model_path="models.evcap_bert_patch_analysis_ver5"
 ext_path="ext_data/ext_memory_lvis.pkl"
 input_image_resize=680  
-bs=1
+bs=6
 accum_grad_iters=1
 topn=9
+SEED=42
+#######################################################################################
 
-CUDA_VISIBLE_DEVICES="0,1" torchrun --nproc_per_node 2 ./train_evcap_bert_patch.py \
+CUDA_VISIBLE_DEVICES="1" torchrun --nproc_per_node 1 ./train_evcap_copy.py \
     --model_path ${model_path} \
     --input_image_resize ${input_image_resize} \
     --ext_path ${ext_path} \
-    --annotation_file_for_train annotations/captions_train2014_sampled.json \
+    --annotation_file_for_train annotations/captions_train2014.json \
     --out_dir results/TRAIN/${SUB_FOLDER}/${EXP_NAME} \
     --bs ${bs} \
-    --accum_grad_iters ${accum_grad_iters} \
     --log_folder $SAVE_FILE \
-    --low_resource false \
     --topn ${topn} \
+    --random_seed ${SEED} \
     |& tee -a  ${TRAIN_LOG_FILE} \
-&& {
-    # EVALUATION
-    SHELL_FOLDER=$(cd "$(dirname "$0")";pwd)
-    cd $SHELL_FOLDER/..
 
-    DEVICE="0"
-    NOCAPS_OUT_PATH=results/EVAL/VAL/${SUB_FOLDER}/${EXP_NAME}
+    #  --accum_grad_iters ${accum_grad_iters} \
 
-    LOG_FOLDER=logs/EVAL/VAL/${SUB_FOLDER}/${EXP_NAME}
-    mkdir -p $LOG_FOLDER
+# EVALUATION
+SHELL_FOLDER=$(cd "$(dirname "$0")";pwd)
+cd $SHELL_FOLDER/..
 
-    NOCAPS_LOG_FILE="$LOG_FOLDER/NOCAPS_${TIME_START}.log"
+DEVICE="0"
+NOCAPS_OUT_PATH=results/EVAL/VAL/${SUB_FOLDER}/${EXP_NAME}
 
-    ##########################################
-    # MODEL CONFIGURATION (Need to be adjusted)
-    ckpt=results/TRAIN/${SUB_FOLDER}/${EXP_NAME}/final_result_000.pt
+LOG_FOLDER=logs/EVAL/VAL/${SUB_FOLDER}/${EXP_NAME}
+mkdir -p $LOG_FOLDER
 
-    ##########################################
-    # Dataset Adjustments
-    # path_of_val_datasets
+NOCAPS_LOG_FILE="$LOG_FOLDER/NOCAPS_${TIME_START}.log"
 
-    python -u eval_evcap_bert_patch.py \
+##########################################
+# MODEL CONFIGURATION (Need to be adjusted)
+ckpt=results/TRAIN/${SUB_FOLDER}/${EXP_NAME}/final_result_000.pt
+
+##########################################
+
+python -u eval_evcap_bert_patch.py \
     --model_path ${model_path} \
-    --path_of_val_datasets ./data/coco/coco2014/annotations/captions_val2014_sampled_005_fixed_format.json \
+    --path_of_val_datasets ./data/coco/karpathy/captions_testKarpathy_fixed_format.json \
     --image_size ${input_image_resize} \
     --device cuda:$DEVICE \
     --name_of_datasets coco_val2014 \
@@ -62,9 +64,10 @@ CUDA_VISIBLE_DEVICES="0,1" torchrun --nproc_per_node 2 ./train_evcap_bert_patch.
     --ext_data_path ${ext_path} \
     --topn ${topn} \
     --log_folder ${LOG_FOLDER} \
+    --random_seed ${SEED} \
     |& tee -a  ${NOCAPS_LOG_FILE}
 
-}
+
 
 
 # --model_path models.evcap_bert_patch_analysis_ver5 --input_image_resize 680 --ext_path ext_data/result/embeddings_32/ext_memory_lvis_distilled_with_img_id.pkl --annotation_file_for_train annotations/captions_train2014_sampled.json --bs 1 --accum_grad_iters 1 --low_resource false --topn 26
