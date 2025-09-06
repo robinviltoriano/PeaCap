@@ -13,6 +13,7 @@ data/coco/karpathy/**
 !data/coco/coco2014/annotations/
 !data/coco/coco2014/annotations/captions_train2014_sampled.json
 !data/coco/coco2014/annotations/captions_val2014_sampled_005_fixed_format.json
+!data/coco/coco2014/annotations/captions_train2014.json
 
 dataset/notebook/*
 
