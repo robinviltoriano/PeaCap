@@ -3,7 +3,8 @@
 data/lvis/** 
 data/coco/coco2014/**
 data/coco/created_usefull_file/**
-# data/coco/karpathy/**
+data/nocaps/val/**/*.jpg
+data/flickr30k/**/*.jpg
 
 # But don’t ignore these two files
 # Unignore the folders leading to the files
@@ -55,3 +56,5 @@ evaluation/*
 
 .env
 secrets.txt
+
+**/sandbox.ipynb

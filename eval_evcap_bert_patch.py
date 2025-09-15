@@ -112,10 +112,10 @@ def validation_coco_flickr30k(
     with open(inpath, 'r') as infile:
         annotations = json.load(infile)
     predicts = []
-    for idx, item in tqdm(enumerate(annotations)):
-        image_id = item
-        captions = annotations[item]
-        image_path = args.image_folder + image_id
+    for idx, item in tqdm(enumerate(annotations['annotations'])):
+        image_id = item['image_id']
+        captions = item['captions']
+        image_path = f"{args.image_folder}/{item['filename']}"
         print('\n')
         print(image_path)
         print('GT: ', captions)
@@ -207,15 +207,14 @@ def validation_nocaps(
     neardomain = []
     outdomain = []
     overall = []
-    img_info = json.load(open('/home/nlab/li/research/3_NOC/ours_blip/M_MiniGPT-4/data/nocaps/nocaps_val.json','r'))
+    # img_info = json.load(open('/home/nlab/li/research/3_NOC/ours_blip/M_MiniGPT-4/data/nocaps/nocaps_val.json','r'))
     model.eval()
-    for idx, annotation in tqdm(enumerate(annotations)):
-        ann = img_info[idx]
-        image_file = ann['image']
-        img_id = ann['img_id']
-        image_id = annotation['image_id']
-        split = annotation['split']
-        captions = annotation['caption']
+    for ann, img in tqdm(zip(annotations['annotations'], annotations['images']), total=len(annotations['annotations'])):
+        # ann = img_info[idx]
+        image_file = img['file_name']
+        image_id = img['id']
+        split = img['domain']
+        captions = ann['caption']
         print('\n')
         image_path = args.image_folder + '/' + image_file
         print(image_path)
@@ -245,11 +244,11 @@ def validation_nocaps(
             predict["prediction"] = sentence
 
             overall.append(predict)
-            if split == 'in_domain':
+            if split == 'in-domain':
                 indomain.append(predict)
-            elif split == 'near_domain':
+            elif split == 'near-domain':
                 neardomain.append(predict)
-            elif split == 'out_domain':
+            elif split == 'out-domain':
                 outdomain.append(predict)
 
     if not os.path.exists(args.out_path):
@@ -317,7 +316,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type = str, required=True, help = 'path to the model')
     parser.add_argument('--device', default = 'cuda:0')
     parser.add_argument('--model_name', type = str, default = 'EVCap', help = 'name of the model class')
-    parser.add_argument('--name_of_datasets', default = 'coco_val2014', choices = ('coco', 'flickr30k', 'nocaps', 'whoops','coco_val2014'))
+    parser.add_argument('--name_of_datasets', default = 'nocaps', choices = ('coco', 'flickr30k', 'nocaps', 'whoops','coco_val2014'))
     parser.add_argument('--image_size', type = int, default = 224, help = 'image size for preprocessing')
     parser.add_argument('--path_of_val_datasets', default = 'data/coco/karpathy/caption_testKarpathy_in_scope_val_reference.json')
     parser.add_argument('--image_folder', default = 'data/coco/coco2014/val2014/')
