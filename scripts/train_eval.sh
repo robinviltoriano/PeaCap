@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # TRAINING
-EXP_NAME='peacap_ver7_loss'
+EXP_NAME='peacap_cross_att'
 TIME_START=$(date "+%d-%m-%Y_%H:%M:%S")
 LOG_FOLDER=logs
-SUB_FOLDER=SAMPLE
+SUB_FOLDER=ABLATION_STUDY
 SAVE_FILE=${LOG_FOLDER}/TRAIN/${SUB_FOLDER}/${EXP_NAME}
 mkdir -p $SAVE_FILE 
 
@@ -12,7 +12,7 @@ TRAIN_LOG_FILE="$LOG_FOLDER/TRAIN/${SUB_FOLDER}/${EXP_NAME}/TRAINING_${TIME_STAR
 
 #######################################################################################
 # MODEL CONFIGURATION (Need to be adjusted)
-model_path="models.peacap_ver7_loss"
+model_path="models.ablation_study.peacap_cross_att"
 ext_path="ext_data/ext_memory_lvis.pkl"
 input_image_resize=680  
 bs=1

@@ -20,7 +20,7 @@ from common.dist_utils import download_cached_file
 from common.utils import is_url
 from common.logger import MetricLogger
 from models.base_model import BaseModel
-from models.Qformer_robin import BertConfig, BertLMHeadModel
+from models.Qformer_modified import BertConfig, BertLMHeadModel
 from models.Qformer_txt import BertLMHeadModel_txt
 from models.eva_vit import create_eva_vit_g
 from transformers import BertTokenizer

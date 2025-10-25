@@ -168,7 +168,10 @@ def validation_coco_val2014(
         print('GT: ', captions)
         image = preprocess_image(image_path, resize = args.image_size).to(device)
         with torch.autocast('cuda', enabled=True):
-            qform_all_proj, atts_qform_all_proj  = model.encode_img(image)
+            try:
+                qform_all_proj, atts_qform_all_proj = model.encode_img(image)
+            except:
+                qform_all_proj, atts_qform_all_proj, _ = model.encode_img(image)
             prompt_embeds, _ = model.prompt_wrap(qform_all_proj, atts_qform_all_proj, model.prompt_list) #(self, img_embeds, batch_names, atts_img, prompt_list):
             tokenizer.padding_side = "right"
             batch_size = qform_all_proj.shape[0]

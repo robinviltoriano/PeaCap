@@ -58,3 +58,7 @@ evaluation/*
 secrets.txt
 
 **/sandbox.ipynb
+
+models/ablation_study/** 
+
+*.zip

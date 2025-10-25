@@ -812,6 +812,7 @@ class BertModel(BertPreTrainedModel):
         position_ids=None,
         head_mask=None,
         query_embeds=None,
+        image_query_output=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         past_key_values=None,
@@ -887,7 +888,8 @@ class BertModel(BertPreTrainedModel):
             )
             
             if query_embeds is not None:
-                embedding_output = torch.cat((query_embeds, embedding_output), dim=1)
+                # embedding_output = torch.cat((query_embeds, image_query_output, embedding_output), dim=1)
+                embedding_output = torch.cat((image_query_output, query_embeds, embedding_output), dim=1)
                 
         else:
             assert False, "input_type should be either 'image' or 'text'"
