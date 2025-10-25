@@ -48,6 +48,7 @@ results/EVAL/**/*.json
 results/**/*.jpg 
 results/**/*.png
 results/**/*.pt
+results/**/*.json
 
 **/training_metrics.json
 dataset/result/sample_data/images/captions_val2014_sampled_005_sampling_statistics.png

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-EXP_NAME='evcap2'
+EXP_NAME='peacap'
 TIME_START=$(date "+%d-%m-%Y_%H:%M:%S")
 LOG_FOLDER=logs
 SUB_FOLDER=TRAIN/SAMPLE
@@ -10,13 +10,13 @@ mkdir -p $SAVE_FILE
 TRAIN_LOG_FILE="$LOG_FOLDER/${SUB_FOLDER}/${EXP_NAME}/TRAINING_${TIME_START}.log"
 
 # MODEL CONFIGURATION
-model_path="models.evcap"
+model_path="models.peacap"
 ext_path="ext_data/ext_memory_lvis.pkl"
 input_image_resize=224
 bs=6
 accum_grad_iters=1
 
-CUDA_VISIBLE_DEVICES="0" torchrun --nproc_per_node 1 ./train_evcap_bert_patch.py \
+CUDA_VISIBLE_DEVICES="0" torchrun --nproc_per_node 1 ./train.py \
     --model_path ${model_path} \
     --input_image_resize ${input_image_resize} \
     --ext_path ${ext_path} \
@@ -27,7 +27,3 @@ CUDA_VISIBLE_DEVICES="0" torchrun --nproc_per_node 1 ./train_evcap_bert_patch.py
     --log_folder $SAVE_FILE \
     --low_resource false \
     |& tee -a  ${TRAIN_LOG_FILE}
-
-
-
-# --model_path models.evcap_bert_selected_patch_analysis_ver3_big_vector --device cuda:1 --input_image_resize 900 --bs 2 --accum_grad_iters 32 --ext_path ext_data/sample_10_categories/ext_memory_with_32_embeddings.pkl --annotation_file_for_train annotations/captions_train2014_10_categories_selected_patch.json

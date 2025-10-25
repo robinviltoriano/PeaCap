@@ -262,7 +262,7 @@ def main():
     print(" # PID :", os.getpid())
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model module')
-    parser.add_argument('--model_name', type=str, default='EVCap')
+    parser.add_argument('--model_name', type=str, default='PeaCap')
     parser.add_argument('--out_dir', default='./checkpoints')
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--bs', type=int, default=4)
@@ -308,7 +308,7 @@ def main():
         # "num_query_token_txt":8,
         "topn": args.topn,
         "llama_model":model_type,
-        "prompt_path":"prompts/prompt_evcap.txt",
+        "prompt_path":"prompts/prompt_peacap.txt",
         "prompt_template":'###Human: {} ###Assistant: ',
         "max_txt_len":128,
         "end_sym":'\n',
@@ -325,8 +325,8 @@ def main():
     print(f"Saving model configuration and arguments to {os.path.join(log_folder, 'model_config_and_arguments.json')}")
     json.dump(log_data, open(os.path.join(log_folder, 'model_config_and_arguments.json'), 'w'), indent=4)
     
-    EVCap = load_model(args.model_path, args.model_name)
-    model = EVCap(**model_config)
+    PeaCap = load_model(args.model_path, args.model_name)
+    model = PeaCap(**model_config)
     
     train(dataset, model, args)
     

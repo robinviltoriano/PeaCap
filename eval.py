@@ -9,7 +9,6 @@ import random
 import numpy as np
 
 import importlib
-# from models.evcap_bert_patch_ver3 import EVCap
 from evaluation.pycocoevalcap.eval import COCOEvalCap
 
 from torchvision import transforms
@@ -280,13 +279,12 @@ def main(args, model_config) -> None:
     # initializing
     device = args.device
     # loading model
-    # ckpt = 'results/train_evcap/000.pt' ## change
     ckpt = args.ckpt
     print('load:', ckpt)
     
-    EVCap = load_model(args.model_path, args.model_name)
+    PeaCap = load_model(args.model_path, args.model_name)
 
-    model = EVCap(**model_config)
+    model = PeaCap(**model_config)
     state_dict = torch.load(ckpt, map_location=device)['model']
 
 
@@ -318,7 +316,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type = str, required=True, help = 'path to the model')
     parser.add_argument('--device', default = 'cuda:0')
-    parser.add_argument('--model_name', type = str, default = 'EVCap', help = 'name of the model class')
+    parser.add_argument('--model_name', type = str, default = 'PeaCap', help = 'name of the model class')
     parser.add_argument('--name_of_datasets', default = 'nocaps', choices = ('coco', 'flickr30k', 'nocaps', 'whoops','coco_val2014'))
     parser.add_argument('--image_size', type = int, default = 224, help = 'image size for preprocessing')
     parser.add_argument('--path_of_val_datasets', default = 'data/coco/karpathy/caption_testKarpathy_in_scope_val_reference.json')
@@ -329,7 +327,7 @@ if __name__ == '__main__':
     parser.add_argument('--beam_width', type = int, default = 5, help = 'width of beam')
     parser.add_argument('--random_seed', type = int, default = 42, help = 'set random seed for reproducing')
     parser.add_argument('--ext_data_path', type = str, default='ext_data/ext_memory_original_sample.pkl', help = 'path to the external data')
-    parser.add_argument('--ckpt', type = str, default='results/train_evcap_bert_patch_ver4_in_scope/final_result_000.pt', help = 'path to the checkpoint')
+    parser.add_argument('--ckpt', type = str, default='results/TRAIN/FULL_DATA/peacap_ver7_loss/final_result_000.pt', help = 'path to the checkpoint')
     parser.add_argument('--log_folder', type = str, default = 'logs', help = 'folder to save logs')
     args = parser.parse_args()
     set_seed(args.random_seed)
@@ -349,7 +347,7 @@ if __name__ == '__main__':
         "num_query_token" : 32,
         "topn" :  args.topn,
         "llama_model" : "lmsys/vicuna-7b-v1.3",
-        "prompt_path" : "prompts/prompt_evcap.txt",
+        "prompt_path" : "prompts/prompt_peacap.txt",
         "prompt_template" : '###Human: {} ###Assistant: ',
         "max_txt_len" : 128,
         "end_sym" : '\n',

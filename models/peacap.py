@@ -12,11 +12,10 @@ import faiss
 import re
 from torch.nn import functional as F
 from models.Qformer_modified import BertConfig
-# from models.FusionTransformer import FusionTransformer
 from models.CrossAttention import CrossAttentionTransformer
 
 
-class EVCap(Blip2Base):
+class PeaCap(Blip2Base):
     
     def __init__(
         self,
@@ -33,7 +32,7 @@ class EVCap(Blip2Base):
         num_query_token_txt=8,
         topn=9,
         llama_model="",
-        prompt_path="prompts/prompt_evcap.txt",
+        prompt_path="prompts/prompt_peacap.txt",
         prompt_template='###Human: {} ###Assistant: ',
         max_txt_len=160,
         end_sym='\n',
@@ -420,7 +419,7 @@ class EVCap(Blip2Base):
     
 if __name__ == "__main__":
     """
-    This code is for testing the EVCap model.
+    This code is for testing the PeaCap model.
     It initializes the model and runs a forward pass with dummy data.
     It is not intended for production use.
     """
@@ -432,7 +431,7 @@ if __name__ == "__main__":
     image_resize = 680
     dataset = COCODataset(data_root=data_root, annotation_file='annotations/captions_train2014_sampled.json', resize=image_resize)
     model_type = "lmsys/vicuna-7b-v1.3"
-    model = EVCap(
+    model = PeaCap(
             ext_path= 'ext_data/ext_memory_lvis.pkl',
             vit_model="eva_clip_g",
             q_former_model="https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth",

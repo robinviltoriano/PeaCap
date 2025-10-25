@@ -21,7 +21,7 @@ topn=9
 SEED=42
 #######################################################################################
 
-CUDA_VISIBLE_DEVICES="1" torchrun --nproc_per_node 1 ./train_evcap_bert_patch.py \
+CUDA_VISIBLE_DEVICES="1" torchrun --nproc_per_node 1 ./train.py \
     --model_path ${model_path} \
     --input_image_resize ${input_image_resize} \
     --ext_path ${ext_path} \
@@ -53,7 +53,7 @@ ckpt=results/TRAIN/${SUB_FOLDER}/${EXP_NAME}/final_result_000.pt
 
 ##########################################
 
-python -u eval_evcap_bert_patch.py \
+python -u eval.py \
     --model_path ${model_path} \
     --path_of_val_datasets ./data/coco/coco2014/annotations/captions_val2014_sampled_005_fixed_format.json \
     --image_size ${input_image_resize} \
@@ -66,11 +66,3 @@ python -u eval_evcap_bert_patch.py \
     --log_folder ${LOG_FOLDER} \
     --random_seed ${SEED} \
     |& tee -a  ${NOCAPS_LOG_FILE}
-
-
-
-
-# --model_path models.peacap_ver4_loss --input_image_resize 680 --ext_path ext_data/ext_memory_lvis.pkl --annotation_file_for_train annotations/captions_train2014_sampled.json --bs 1 --accum_grad_iters 1 --low_resource false --topn 9
-
-
-# --image_size 900 --model_path models.evcap_bert_patch_analysis_ver2_big_vector --path_of_val_datasets ./data/coco/karpathy/captions_testKarpathy_10_categories_val_reference_selected_patch.json --ckpt results/TRAIN/SAMPLED_10_CATEGORIES/PATCH_ANALYSIS/SELECTED_PATCHES/evcap_bert_selected_patch_analysis_ver2_big_vector/final_result_000.pt --ext_data_path ext_data/sample_10_categories/ext_memory_with_32_embeddings_and_selected_patch.pkl
